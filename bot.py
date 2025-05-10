@@ -42,7 +42,11 @@ def handle_link(_, msg: Message):
 
     def download_thread():
         try:
-            r = requests.get(url, stream=True)
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer": url
+            }
+            r = requests.get(url, headers=headers, stream=True, timeout=30)
             total = int(r.headers.get('content-length', 0))
             total_mb = round(total / 1024 / 1024, 2)
 
@@ -51,7 +55,7 @@ def handle_link(_, msg: Message):
                 start_time = time()
                 last_update = time()
 
-                for chunk in r.iter_content(chunk_size=1024*1024):
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
