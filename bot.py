@@ -4,7 +4,7 @@ from time import time
 import requests
 from flask import Flask
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
 # ==== CONFIG ====
 API_ID = 28593211
@@ -27,6 +27,8 @@ Send a direct link to:
 Need help? Contact @Fr10pro
 """
 
+cancel_flags = {}
+
 @app.on_message(filters.command("start"))
 def start(_, msg: Message):
     msg.reply_text(WELCOME_TEXT)
@@ -38,7 +40,12 @@ def handle_link(_, msg: Message):
         return msg.reply("Invalid link. Please send a valid direct download link.")
 
     filename = url.split("/")[-1].split("?")[0]
-    download_msg = msg.reply(f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s")
+    download_msg = msg.reply(f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s",
+                             reply_markup=InlineKeyboardMarkup([
+                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
+                             ]))
+
+    cancel_flags[filename] = False  # Initialize cancel flag
 
     def download_thread():
         try:
@@ -56,6 +63,12 @@ def handle_link(_, msg: Message):
                 last_update = time()
 
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if cancel_flags.get(filename):
+                        download_msg.edit(f"❌ **Download canceled:** `{filename}`")
+                        f.close()
+                        os.remove(filename)
+                        return
+
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -63,7 +76,10 @@ def handle_link(_, msg: Message):
                         if now - last_update >= 1:
                             speed = round((downloaded / 1024 / 1024) / (now - start_time + 0.1), 2)
                             done_mb = round(downloaded / 1024 / 1024, 2)
-                            download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
+                            download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s",
+                                              reply_markup=InlineKeyboardMarkup([
+                                                  [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
+                                              ]))
                             last_update = now
 
             buttons = InlineKeyboardMarkup([
@@ -73,27 +89,30 @@ def handle_link(_, msg: Message):
                 ]
             ])
             download_msg.edit(f"✅ **Downloaded `{filename}` ({total_mb} MB)**\nChoose upload format:", reply_markup=buttons)
+
         except Exception as e:
-            download_msg.edit(f"Error downloading file: `{e}`")
+            download_msg.edit(f"❌ Error downloading: `{e}`")
+        finally:
+            cancel_flags.pop(filename, None)
 
     threading.Thread(target=download_thread).start()
 
-def upload_progress(current, total, message: Message, start_time):
-    percent = current * 100 / total
-    speed = round(current / 1024 / 1024 / (time() - start_time + 0.1), 2)
-    done_mb = round(current / 1024 / 1024, 2)
-    total_mb = round(total / 1024 / 1024, 2)
-    try:
-        message.edit(f"**Uploading...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
-    except:
-        pass
-
 @app.on_callback_query()
-def upload_file(_, cb):
+def handle_callback(_, cb: CallbackQuery):
+    if cb.data.startswith("cancel|"):
+        fname_part = cb.data.split("|")[1]
+        matches = [f for f in cancel_flags if f.startswith(fname_part)]
+        if matches:
+            cancel_flags[matches[0]] = True
+            cb.message.edit("❌ **Download canceled by user.**")
+        else:
+            cb.message.edit("⚠️ No active download found.")
+        return
+
     action, fname_part = cb.data.split("|")
     file_match = [f for f in os.listdir() if f.startswith(fname_part)]
     if not file_match:
-        return cb.message.edit("File not found or expired.")
+        return cb.message.edit("❌ File not found or expired.")
 
     file_path = file_match[0]
     caption = "Made by @Fr10pro"
@@ -123,10 +142,20 @@ def upload_file(_, cb):
         cb.message.delete()
         sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
     except Exception as e:
-        cb.message.edit(f"Upload failed: `{e}`")
+        cb.message.edit(f"❌ Upload failed: `{e}`")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
+
+def upload_progress(current, total, message: Message, start_time):
+    percent = current * 100 / total
+    speed = round(current / 1024 / 1024 / (time() - start_time + 0.1), 2)
+    done_mb = round(current / 1024 / 1024, 2)
+    total_mb = round(total / 1024 / 1024, 2)
+    try:
+        message.edit(f"**Uploading...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
+    except:
+        pass
 
 # === Keep-Alive Web Server ===
 web = Flask(__name__)
