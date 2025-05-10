@@ -14,6 +14,8 @@ THUMB_PATH = "thumb.jpg"
 # ================
 
 app = Client("file_downloader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+web = Flask(__name__)
+BOT_USERNAME = None  # Will be loaded later
 
 WELCOME_TEXT = """
 **Welcome to File Downloader Bot!**
@@ -28,17 +30,17 @@ Need help? Contact @Fr10pro
 """
 
 @app.on_message(filters.command("start"))
-def start(_, msg: Message):
-    msg.reply_text(WELCOME_TEXT)
+async def start(_, msg: Message):
+    await msg.reply_text(WELCOME_TEXT)
 
 @app.on_message(filters.text & ~filters.command("start"))
-def handle_link(_, msg: Message):
+async def handle_link(_, msg: Message):
     url = msg.text.strip()
     if not url.startswith("http"):
-        return msg.reply("Invalid link. Please send a valid direct download link.")
+        return await msg.reply("Invalid link. Please send a valid direct download link.")
 
     filename = url.split("/")[-1].split("?")[0]
-    download_msg = msg.reply(f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s")
+    download_msg = await msg.reply(f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s")
 
     def download_thread():
         try:
@@ -59,7 +61,9 @@ def handle_link(_, msg: Message):
                         if now - last_update >= 1:
                             speed = round((downloaded / 1024 / 1024) / (now - start_time + 0.1), 2)
                             done_mb = round(downloaded / 1024 / 1024, 2)
-                            download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
+                            try:
+                                download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
+                            except: pass
                             last_update = now
 
             buttons = InlineKeyboardMarkup([
@@ -68,39 +72,40 @@ def handle_link(_, msg: Message):
                     InlineKeyboardButton("As Document", callback_data=f"d|{filename[:40]}")
                 ]
             ])
-            download_msg.edit(f"✅ **Downloaded `{filename}` ({total_mb} MB)**\nChoose upload format:", reply_markup=buttons)
+            try:
+                download_msg.edit(f"✅ **Downloaded `{filename}` ({total_mb} MB)**\nChoose upload format:", reply_markup=buttons)
+            except: pass
         except Exception as e:
             download_msg.edit(f"Error downloading file: `{e}`")
 
     threading.Thread(target=download_thread).start()
 
 def upload_progress(current, total, message: Message, start_time):
-    percent = current * 100 / total
-    speed = round(current / 1024 / 1024 / (time() - start_time + 0.1), 2)
-    done_mb = round(current / 1024 / 1024, 2)
-    total_mb = round(total / 1024 / 1024, 2)
     try:
+        speed = round(current / 1024 / 1024 / (time() - start_time + 0.1), 2)
+        done_mb = round(current / 1024 / 1024, 2)
+        total_mb = round(total / 1024 / 1024, 2)
         message.edit(f"**Uploading...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
     except:
         pass
 
 @app.on_callback_query()
-def upload_file(_, cb):
+async def upload_file(_, cb):
+    global BOT_USERNAME
     action, fname_part = cb.data.split("|")
     file_match = [f for f in os.listdir() if f.startswith(fname_part)]
     if not file_match:
-        return cb.message.edit("File not found or expired.")
+        return await cb.message.edit("File not found or expired.")
 
     file_path = file_match[0]
     caption = "Made by @Fr10pro"
-    cb.message.edit("**Uploading file...**")
-
+    await cb.message.edit("**Uploading file...**")
     thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
     start_time = time()
 
     try:
         if action == "v":
-            sent = cb.message.reply_video(
+            sent = await cb.message.reply_video(
                 video=file_path,
                 caption=caption,
                 thumb=thumb,
@@ -108,7 +113,7 @@ def upload_file(_, cb):
                 progress_args=(cb.message, start_time)
             )
         else:
-            sent = cb.message.reply_document(
+            sent = await cb.message.reply_document(
                 document=file_path,
                 caption=caption,
                 thumb=thumb,
@@ -116,24 +121,26 @@ def upload_file(_, cb):
                 progress_args=(cb.message, start_time)
             )
 
-        cb.message.delete()
-        sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
+        await cb.message.delete()
+        await sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{BOT_USERNAME}](https://t.me/{BOT_USERNAME})")
     except Exception as e:
-        cb.message.edit(f"Upload failed: `{e}`")
+        await cb.message.edit(f"Upload failed: `{e}`")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
-def main():
-    app.run()
-
-# === Keep-Alive Web Server ===
-web = Flask(__name__)
-
+# === Web server ===
 @web.route('/')
 def home():
     return "Bot is running!"
 
+def run_bot():
+    global BOT_USERNAME
+    with app:
+        me = app.get_me()
+        BOT_USERNAME = me.username
+        app.run()
+
 if __name__ == "__main__":
-    threading.Thread(target=main).start()
+    threading.Thread(target=run_bot).start()
     web.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
