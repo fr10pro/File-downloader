@@ -124,16 +124,16 @@ def upload_file(_, cb):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# === Web Keep-Alive ===
+# === Keep-Alive Web Server ===
 web = Flask(__name__)
 
 @web.route('/')
 def home():
     return "Bot is running!"
 
-def start_bot():
-    app.run()
+def run_web():
+    web.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
-    web.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    threading.Thread(target=run_web).start()
+    app.run()  # Run pyrogram in main thread
