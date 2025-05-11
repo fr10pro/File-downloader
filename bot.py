@@ -2,7 +2,7 @@ import os
 import threading
 from time import time
 import requests
-from flask import Flask
+from flask import Flask, render_template_string
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
@@ -14,6 +14,9 @@ THUMB_PATH = "thumb.jpg"
 # ================
 
 app = Client("file_downloader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+web = Flask(__name__)
+
+cancel_flags = {}
 
 WELCOME_TEXT = """
 **Welcome to File Downloader Bot!**
@@ -25,8 +28,6 @@ Send a direct link to:
 
 Need help? Contact @Fr10pro
 """
-
-cancel_flags = {}
 
 @app.on_message(filters.command("start"))
 def start(_, msg: Message):
@@ -44,12 +45,12 @@ def handle_link(_, msg: Message):
                                  [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
                              ]))
 
-    cancel_flags[filename] = False  # Initialize cancel flag
+    cancel_flags[filename] = False
 
     def download_thread():
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "User-Agent": "Mozilla/5.0",
                 "Referer": url
             }
             r = requests.get(url, headers=headers, stream=True, timeout=30)
@@ -114,7 +115,7 @@ def handle_callback(_, cb: CallbackQuery):
         return cb.message.edit("❌ File not found or expired.")
 
     file_path = file_match[0]
-    caption = "Made by @Fr10pro"
+    caption = f"{file_path} | Made by @Fr10pro"
     cb.message.edit("**Uploading file...**")
 
     thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
@@ -140,6 +141,7 @@ def handle_callback(_, cb: CallbackQuery):
 
         cb.message.delete()
         sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
+
     except Exception as e:
         cb.message.edit(f"❌ Upload failed: `{e}`")
     finally:
@@ -156,16 +158,37 @@ def upload_progress(current, total, message: Message, start_time):
     except:
         pass
 
-# === Keep-Alive Web Server ===
-web = Flask(__name__)
+# === Admin Panel UI ===
+@web.route('/admin')
+def admin_panel():
+    files = [f for f in os.listdir() if os.path.isfile(f) and not f.endswith('.py')]
+    html = """
+    <html><head><title>Admin Panel - Downloaded Files</title>
+    <style>
+    body { background: #0e0e0e; color: white; font-family: Arial; padding: 30px; }
+    h1 { color: #00ff88; }
+    ul { list-style-type: none; padding: 0; }
+    li { margin-bottom: 10px; background: #1f1f1f; padding: 10px; border-radius: 8px; }
+    </style></head><body>
+    <h1>Downloaded Files</h1>
+    <ul>
+    {% for file in files %}
+        <li>{{ loop.index }}. {{ file }}</li>
+    {% else %}
+        <li>No files found.</li>
+    {% endfor %}
+    </ul></body></html>
+    """
+    return render_template_string(html, files=files)
 
+# === Keep-Alive Web Server ===
 @web.route('/')
 def home():
-    return "Bot is running!"
+    return "Bot is running! Visit /admin to view downloaded files."
 
 def run_web():
     web.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
-    app.run()  # Run pyrogram in main thread
+    app.run()
