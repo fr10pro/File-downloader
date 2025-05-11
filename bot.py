@@ -9,7 +9,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, 
 # ==== CONFIG ====
 API_ID = 28593211
 API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d"
-BOT_TOKEN = "7696316358:AAGZw4OUGAT628QX2DBleIVV2JWQTfiQu88"
+BOT_TOKEN = "8145398845:AAH9Vid4Px1l3KrEMcTy4WUgHUCRMg4Pmas"
 THUMB_PATH = "thumb.jpg"
 # ================
 
@@ -20,7 +20,6 @@ WELCOME_TEXT = """
 
 Send a direct link to:
 - Download with speed updates
-- Upload with thumbnail
 - Choose format: Video / Document
 - Share file easily on Telegram
 
