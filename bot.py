@@ -20,14 +20,14 @@ web = Flask(__name__)
 cancel_flags = {}
 
 WELCOME_TEXT = """
-**Welcome to the Stream & File Downloader Bot!**
+**Welcome to File Downloader Bot!**
 
-Send any direct or streaming link:
-- YouTube / Pornhub / HLS / MP4 / etc.
-- Watch real-time progress
-- Choose format: Video / Document
+Send a direct link or streaming link (e.g. Pornhub):
+- Auto download with speed progress
+- Upload as Video or Document
+- Cancel option anytime
 
-Bot by @Fr10pro
+Need help? Contact @Fr10pro
 """
 
 @app.on_message(filters.command("start"))
@@ -38,81 +38,83 @@ def start(_, msg: Message):
 def handle_link(_, msg: Message):
     url = msg.text.strip()
     if not url.startswith("http"):
-        return msg.reply("Invalid link. Please send a valid streaming or direct URL.")
+        return msg.reply("Invalid link. Please send a valid direct or stream link.")
 
     filename = f"{int(time())}.mp4"
-    download_msg = msg.reply(f"**Downloading...**\n0 MB • 0 MB | 0 MB/s",
+    download_msg = msg.reply(f"**Downloading...**\n0 MB • ? MB | 0 MB/s",
                              reply_markup=InlineKeyboardMarkup([
-                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename}")]
+                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
                              ]))
 
     cancel_flags[filename] = False
 
-    def update_progress(d, message, filename):
-        if d.get('status') == 'downloading':
-            downloaded = d.get('downloaded_bytes', 0)
-            total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-            percent = downloaded / total * 100 if total else 0
-            speed = d.get('speed', 0) / 1024 / 1024 if d.get('speed') else 0
-            done_mb = round(downloaded / 1024 / 1024, 2)
-            total_mb = round(total / 1024 / 1024, 2) if total else 0
-            try:
-                message.edit(f"**Downloading...**\n{done_mb} MB • {total_mb} MB | {speed:.2f} MB/s",
-                             reply_markup=InlineKeyboardMarkup([
-                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename}")]
-                             ]))
-            except: pass
-
-    def download_thread():
+    def download_stream():
         try:
             ydl_opts = {
                 'outtmpl': filename,
-                'format': 'bestvideo+bestaudio/best',
-                'merge_output_format': 'mp4',
-                'noplaylist': True,
+                'format': 'best',
                 'quiet': True,
-                'no_call_home': True,
+                'noplaylist': True,
                 'progress_hooks': [lambda d: update_progress(d, download_msg, filename)],
             }
-
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-
+            
             if cancel_flags.get(filename):
-                download_msg.edit(f"❌ **Download canceled:** `{filename}`")
                 if os.path.exists(filename):
                     os.remove(filename)
                 return
 
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("As Video", callback_data=f"v|{filename}"),
-                    InlineKeyboardButton("As Document", callback_data=f"d|{filename}")
+                    InlineKeyboardButton("As Video", callback_data=f"v|{filename[:40]}"),
+                    InlineKeyboardButton("As Document", callback_data=f"d|{filename[:40]}")
                 ]
             ])
-            file_size = round(os.path.getsize(filename) / 1024 / 1024, 2)
-            download_msg.edit(f"✅ **Downloaded `{filename}` ({file_size} MB)**\nChoose upload format:", reply_markup=buttons)
+            download_msg.edit(f"✅ **Downloaded `{filename}`**\nChoose upload format:", reply_markup=buttons)
 
         except Exception as e:
-            download_msg.edit(f"❌ Error downloading: `{e}`")
+            download_msg.edit(f"❌ Error: `{e}`")
         finally:
             cancel_flags.pop(filename, None)
 
-    threading.Thread(target=download_thread).start()
+    threading.Thread(target=download_stream).start()
+
+def update_progress(d, msg: Message, filename):
+    if cancel_flags.get(filename):
+        raise Exception("Cancelled")
+    if d.get('status') == 'downloading':
+        downloaded = d.get('downloaded_bytes', 0)
+        total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+        speed = d.get('speed', 0)
+        percent = int(downloaded * 100 / total) if total else 0
+        done_mb = round(downloaded / 1024 / 1024, 2)
+        total_mb = round(total / 1024 / 1024, 2) if total else "?"
+        speed_mb = round(speed / 1024 / 1024, 2) if speed else 0
+        try:
+            msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed_mb} MB/s")
+        except:
+            pass
 
 @app.on_callback_query()
 def handle_callback(_, cb: CallbackQuery):
     if cb.data.startswith("cancel|"):
-        fname = cb.data.split("|")[1]
-        cancel_flags[fname] = True
-        cb.message.edit("❌ **Download canceled by user.**")
+        fname_part = cb.data.split("|")[1]
+        matches = [f for f in cancel_flags if f.startswith(fname_part)]
+        if matches:
+            cancel_flags[matches[0]] = True
+            cb.message.edit("❌ **Download canceled by user.**")
+        else:
+            cb.message.edit("⚠️ No active download found.")
         return
 
-    action, fname = cb.data.split("|")
-    if not os.path.exists(fname):
+    action, fname_part = cb.data.split("|")
+    file_match = [f for f in os.listdir() if f.startswith(fname_part)]
+    if not file_match:
         return cb.message.edit("❌ File not found or expired.")
 
-    caption = f"{fname} | Made by @Fr10pro"
+    file_path = file_match[0]
+    caption = f"{file_path} | Made by @Fr10pro"
     cb.message.edit("**Uploading file...**")
 
     thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
@@ -121,7 +123,7 @@ def handle_callback(_, cb: CallbackQuery):
     try:
         if action == "v":
             sent = cb.message.reply_video(
-                video=fname,
+                video=file_path,
                 caption=caption,
                 thumb=thumb,
                 progress=upload_progress,
@@ -129,7 +131,7 @@ def handle_callback(_, cb: CallbackQuery):
             )
         else:
             sent = cb.message.reply_document(
-                document=fname,
+                document=file_path,
                 caption=caption,
                 thumb=thumb,
                 progress=upload_progress,
@@ -142,8 +144,8 @@ def handle_callback(_, cb: CallbackQuery):
     except Exception as e:
         cb.message.edit(f"❌ Upload failed: `{e}`")
     finally:
-        if os.path.exists(fname):
-            os.remove(fname)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 def upload_progress(current, total, message: Message, start_time):
     percent = current * 100 / total
@@ -155,7 +157,7 @@ def upload_progress(current, total, message: Message, start_time):
     except:
         pass
 
-# === Web Admin Panel ===
+# === Admin Panel UI ===
 @web.route('/admin')
 def admin_panel():
     files = [f for f in os.listdir() if os.path.isfile(f) and not f.endswith('.py')]
@@ -178,6 +180,7 @@ def admin_panel():
     """
     return render_template_string(html, files=files)
 
+# === Keep-Alive Web Server ===
 @web.route('/')
 def home():
     return "Bot is running! Visit /admin to view downloaded files."
