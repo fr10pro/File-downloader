@@ -2,15 +2,15 @@ import os
 import threading
 from time import time
 import requests
-import yt_dlp
 from flask import Flask, render_template_string
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
+import yt_dlp
 
 # ==== CONFIG ====
 API_ID = 28593211
 API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d"
-BOT_TOKEN = "7654681113:AAFBAvdHIhIGl9XCO9_poX0Qy8xV6a5qKIo"
+BOT_TOKEN = "8145398845:AAH9Vid4Px1l3KrEMcTy4WUgHUCRMg4Pmas"
 THUMB_PATH = "thumb.jpg"
 # ================
 
@@ -22,10 +22,10 @@ cancel_flags = {}
 WELCOME_TEXT = """
 **Welcome to File Downloader Bot!**
 
-Send a direct link or streaming link (e.g. Pornhub):
-- Auto download with speed progress
-- Upload as Video or Document
-- Cancel option anytime
+Send a direct link to:
+- Download with speed updates
+- Choose format: Video / Document
+- Share file easily on Telegram
 
 Need help? Contact @Fr10pro
 """
@@ -38,32 +38,73 @@ def start(_, msg: Message):
 def handle_link(_, msg: Message):
     url = msg.text.strip()
     if not url.startswith("http"):
-        return msg.reply("Invalid link. Please send a valid direct or stream link.")
+        return msg.reply("Invalid link. Please send a valid direct download link.")
 
-    filename = f"{int(time())}.mp4"
-    download_msg = msg.reply(f"**Downloading...**\n0 MB • ? MB | 0 MB/s",
+    is_xh = "xhwide5.com" in url
+    filename = "xh_video.mp4" if is_xh else url.split("/")[-1].split("?")[0]
+
+    download_msg = msg.reply(f"**Downloading `{filename}`...**\n0.00 MB • 0.00 MB | 0.00 MB/s",
                              reply_markup=InlineKeyboardMarkup([
                                  [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
                              ]))
 
     cancel_flags[filename] = False
 
-    def download_stream():
+    def download_thread():
         try:
-            ydl_opts = {
-                'outtmpl': filename,
-                'format': 'best',
-                'quiet': True,
-                'noplaylist': True,
-                'progress_hooks': [lambda d: update_progress(d, download_msg, filename)],
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            
-            if cancel_flags.get(filename):
-                if os.path.exists(filename):
-                    os.remove(filename)
-                return
+            if is_xh:
+                ydl_opts = {
+                    'outtmpl': filename,
+                    'format': 'best',
+                    'merge_output_format': 'mp4',
+                    'noplaylist': True,
+                    'quiet': True,
+                }
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    thumb_url = info.get('thumbnail')
+                    if thumb_url:
+                        r = requests.get(thumb_url, timeout=15)
+                        with open(THUMB_PATH, "wb") as f:
+                            f.write(r.content)
+
+                file_size = os.path.getsize(filename)
+                total_mb = round(file_size / 1024 / 1024, 2)
+
+            else:
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": url
+                }
+                r = requests.get(url, headers=headers, stream=True, timeout=30)
+                total = int(r.headers.get('content-length', 0))
+                total_mb = round(total / 1024 / 1024, 2)
+
+                with open(filename, 'wb') as f:
+                    downloaded = 0
+                    start_time = time()
+                    last_update = time()
+
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if cancel_flags.get(filename):
+                            download_msg.edit(f"❌ **Download canceled:** `{filename}`")
+                            f.close()
+                            os.remove(filename)
+                            return
+
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            now = time()
+                            if now - last_update >= 1:
+                                speed = round((downloaded / 1024 / 1024) / (now - start_time + 0.1), 2)
+                                done_mb = round(downloaded / 1024 / 1024, 2)
+                                download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb:.2f} MB • {total_mb:.2f} MB | {speed:.2f} MB/s",
+                                                  reply_markup=InlineKeyboardMarkup([
+                                                      [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
+                                                  ]))
+                                last_update = now
 
             buttons = InlineKeyboardMarkup([
                 [
@@ -71,30 +112,14 @@ def handle_link(_, msg: Message):
                     InlineKeyboardButton("As Document", callback_data=f"d|{filename[:40]}")
                 ]
             ])
-            download_msg.edit(f"✅ **Downloaded `{filename}`**\nChoose upload format:", reply_markup=buttons)
+            download_msg.edit(f"✅ **Downloaded `{filename}` ({total_mb:.2f} MB)**\nChoose upload format:", reply_markup=buttons)
 
         except Exception as e:
-            download_msg.edit(f"❌ Error: `{e}`")
+            download_msg.edit(f"❌ Error downloading: `{e}`")
         finally:
             cancel_flags.pop(filename, None)
 
-    threading.Thread(target=download_stream).start()
-
-def update_progress(d, msg: Message, filename):
-    if cancel_flags.get(filename):
-        raise Exception("Cancelled")
-    if d.get('status') == 'downloading':
-        downloaded = d.get('downloaded_bytes', 0)
-        total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-        speed = d.get('speed', 0)
-        percent = int(downloaded * 100 / total) if total else 0
-        done_mb = round(downloaded / 1024 / 1024, 2)
-        total_mb = round(total / 1024 / 1024, 2) if total else "?"
-        speed_mb = round(speed / 1024 / 1024, 2) if speed else 0
-        try:
-            msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed_mb} MB/s")
-        except:
-            pass
+    threading.Thread(target=download_thread).start()
 
 @app.on_callback_query()
 def handle_callback(_, cb: CallbackQuery):
@@ -139,7 +164,7 @@ def handle_callback(_, cb: CallbackQuery):
             )
 
         cb.message.delete()
-        sent.reply(f"✅ **Uploaded!**\n**Share this bot:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
+        sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
 
     except Exception as e:
         cb.message.edit(f"❌ Upload failed: `{e}`")
@@ -153,34 +178,20 @@ def upload_progress(current, total, message: Message, start_time):
     done_mb = round(current / 1024 / 1024, 2)
     total_mb = round(total / 1024 / 1024, 2)
     try:
-        message.edit(f"**Uploading...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
+        message.edit(f"**Uploading...**\n{done_mb:.2f} MB • {total_mb:.2f} MB | {speed:.2f} MB/s")
     except:
         pass
 
-# === Admin Panel UI ===
 @web.route('/admin')
 def admin_panel():
     files = [f for f in os.listdir() if os.path.isfile(f) and not f.endswith('.py')]
-    html = """
-    <html><head><title>Admin Panel - Downloaded Files</title>
-    <style>
-    body { background: #0e0e0e; color: white; font-family: Arial; padding: 30px; }
-    h1 { color: #00ff88; }
-    ul { list-style-type: none; padding: 0; }
-    li { margin-bottom: 10px; background: #1f1f1f; padding: 10px; border-radius: 8px; }
-    </style></head><body>
-    <h1>Downloaded Files</h1>
-    <ul>
-    {% for file in files %}
-        <li>{{ loop.index }}. {{ file }}</li>
-    {% else %}
-        <li>No files found.</li>
-    {% endfor %}
-    </ul></body></html>
-    """
+    html = """<html><head><title>Admin Panel - Downloaded Files</title>
+    <style>body { background: #0e0e0e; color: white; font-family: Arial; padding: 30px; }
+    h1 { color: #00ff88; } ul { list-style-type: none; padding: 0; }
+    li { margin-bottom: 10px; background: #1f1f1f; padding: 10px; border-radius: 8px; }</style>
+    </head><body><h1>Downloaded Files</h1><ul>{% for file in files %}<li>{{ loop.index }}. {{ file }}</li>{% else %}<li>No files found.</li>{% endfor %}</ul></body></html>"""
     return render_template_string(html, files=files)
 
-# === Keep-Alive Web Server ===
 @web.route('/')
 def home():
     return "Bot is running! Visit /admin to view downloaded files."
