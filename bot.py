@@ -2,6 +2,7 @@ import os
 import threading
 from time import time
 import requests
+import yt_dlp
 from flask import Flask, render_template_string
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
@@ -9,7 +10,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, 
 # ==== CONFIG ====
 API_ID = 28593211
 API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d"
-BOT_TOKEN = "8145398845:AAH9Vid4Px1l3KrEMcTy4WUgHUCRMg4Pmas"
+BOT_TOKEN = "7654681113:AAFBAvdHIhIGl9XCO9_poX0Qy8xV6a5qKIo"
 THUMB_PATH = "thumb.jpg"
 # ================
 
@@ -19,14 +20,14 @@ web = Flask(__name__)
 cancel_flags = {}
 
 WELCOME_TEXT = """
-**Welcome to File Downloader Bot!**
+**Welcome to the Stream & File Downloader Bot!**
 
-Send a direct link to:
-- Download with speed updates
+Send any direct or streaming link:
+- YouTube / Pornhub / HLS / MP4 / etc.
+- Watch real-time progress
 - Choose format: Video / Document
-- Share file easily on Telegram
 
-Need help? Contact @Fr10pro
+Bot by @Fr10pro
 """
 
 @app.on_message(filters.command("start"))
@@ -37,58 +38,60 @@ def start(_, msg: Message):
 def handle_link(_, msg: Message):
     url = msg.text.strip()
     if not url.startswith("http"):
-        return msg.reply("Invalid link. Please send a valid direct download link.")
+        return msg.reply("Invalid link. Please send a valid streaming or direct URL.")
 
-    filename = url.split("/")[-1].split("?")[0]
-    download_msg = msg.reply(f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s",
+    filename = f"{int(time())}.mp4"
+    download_msg = msg.reply(f"**Downloading...**\n0 MB • 0 MB | 0 MB/s",
                              reply_markup=InlineKeyboardMarkup([
-                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
+                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename}")]
                              ]))
 
     cancel_flags[filename] = False
 
+    def update_progress(d, message, filename):
+        if d.get('status') == 'downloading':
+            downloaded = d.get('downloaded_bytes', 0)
+            total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+            percent = downloaded / total * 100 if total else 0
+            speed = d.get('speed', 0) / 1024 / 1024 if d.get('speed') else 0
+            done_mb = round(downloaded / 1024 / 1024, 2)
+            total_mb = round(total / 1024 / 1024, 2) if total else 0
+            try:
+                message.edit(f"**Downloading...**\n{done_mb} MB • {total_mb} MB | {speed:.2f} MB/s",
+                             reply_markup=InlineKeyboardMarkup([
+                                 [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename}")]
+                             ]))
+            except: pass
+
     def download_thread():
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": url
+            ydl_opts = {
+                'outtmpl': filename,
+                'format': 'bestvideo+bestaudio/best',
+                'merge_output_format': 'mp4',
+                'noplaylist': True,
+                'quiet': True,
+                'no_call_home': True,
+                'progress_hooks': [lambda d: update_progress(d, download_msg, filename)],
             }
-            r = requests.get(url, headers=headers, stream=True, timeout=30)
-            total = int(r.headers.get('content-length', 0))
-            total_mb = round(total / 1024 / 1024, 2)
 
-            with open(filename, 'wb') as f:
-                downloaded = 0
-                start_time = time()
-                last_update = time()
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if cancel_flags.get(filename):
-                        download_msg.edit(f"❌ **Download canceled:** `{filename}`")
-                        f.close()
-                        os.remove(filename)
-                        return
-
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        now = time()
-                        if now - last_update >= 1:
-                            speed = round((downloaded / 1024 / 1024) / (now - start_time + 0.1), 2)
-                            done_mb = round(downloaded / 1024 / 1024, 2)
-                            download_msg.edit(f"**Downloading `{filename}`...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s",
-                                              reply_markup=InlineKeyboardMarkup([
-                                                  [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{filename[:40]}")]
-                                              ]))
-                            last_update = now
+            if cancel_flags.get(filename):
+                download_msg.edit(f"❌ **Download canceled:** `{filename}`")
+                if os.path.exists(filename):
+                    os.remove(filename)
+                return
 
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("As Video", callback_data=f"v|{filename[:40]}"),
-                    InlineKeyboardButton("As Document", callback_data=f"d|{filename[:40]}")
+                    InlineKeyboardButton("As Video", callback_data=f"v|{filename}"),
+                    InlineKeyboardButton("As Document", callback_data=f"d|{filename}")
                 ]
             ])
-            download_msg.edit(f"✅ **Downloaded `{filename}` ({total_mb} MB)**\nChoose upload format:", reply_markup=buttons)
+            file_size = round(os.path.getsize(filename) / 1024 / 1024, 2)
+            download_msg.edit(f"✅ **Downloaded `{filename}` ({file_size} MB)**\nChoose upload format:", reply_markup=buttons)
 
         except Exception as e:
             download_msg.edit(f"❌ Error downloading: `{e}`")
@@ -100,22 +103,16 @@ def handle_link(_, msg: Message):
 @app.on_callback_query()
 def handle_callback(_, cb: CallbackQuery):
     if cb.data.startswith("cancel|"):
-        fname_part = cb.data.split("|")[1]
-        matches = [f for f in cancel_flags if f.startswith(fname_part)]
-        if matches:
-            cancel_flags[matches[0]] = True
-            cb.message.edit("❌ **Download canceled by user.**")
-        else:
-            cb.message.edit("⚠️ No active download found.")
+        fname = cb.data.split("|")[1]
+        cancel_flags[fname] = True
+        cb.message.edit("❌ **Download canceled by user.**")
         return
 
-    action, fname_part = cb.data.split("|")
-    file_match = [f for f in os.listdir() if f.startswith(fname_part)]
-    if not file_match:
+    action, fname = cb.data.split("|")
+    if not os.path.exists(fname):
         return cb.message.edit("❌ File not found or expired.")
 
-    file_path = file_match[0]
-    caption = f"{file_path} | Made by @Fr10pro"
+    caption = f"{fname} | Made by @Fr10pro"
     cb.message.edit("**Uploading file...**")
 
     thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
@@ -124,7 +121,7 @@ def handle_callback(_, cb: CallbackQuery):
     try:
         if action == "v":
             sent = cb.message.reply_video(
-                video=file_path,
+                video=fname,
                 caption=caption,
                 thumb=thumb,
                 progress=upload_progress,
@@ -132,7 +129,7 @@ def handle_callback(_, cb: CallbackQuery):
             )
         else:
             sent = cb.message.reply_document(
-                document=file_path,
+                document=fname,
                 caption=caption,
                 thumb=thumb,
                 progress=upload_progress,
@@ -140,13 +137,13 @@ def handle_callback(_, cb: CallbackQuery):
             )
 
         cb.message.delete()
-        sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
+        sent.reply(f"✅ **Uploaded!**\n**Share this bot:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
 
     except Exception as e:
         cb.message.edit(f"❌ Upload failed: `{e}`")
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(fname):
+            os.remove(fname)
 
 def upload_progress(current, total, message: Message, start_time):
     percent = current * 100 / total
@@ -158,7 +155,7 @@ def upload_progress(current, total, message: Message, start_time):
     except:
         pass
 
-# === Admin Panel UI ===
+# === Web Admin Panel ===
 @web.route('/admin')
 def admin_panel():
     files = [f for f in os.listdir() if os.path.isfile(f) and not f.endswith('.py')]
@@ -181,7 +178,6 @@ def admin_panel():
     """
     return render_template_string(html, files=files)
 
-# === Keep-Alive Web Server ===
 @web.route('/')
 def home():
     return "Bot is running! Visit /admin to view downloaded files."
