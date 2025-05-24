@@ -1,96 +1,31 @@
-# bot.py
-import os
-import asyncio
-import logging
-from flask import Flask, request
-from pyrogram import Client, filters
-from pyrogram.types import Message
-from werkzeug.middleware.proxy_fix import ProxyFix
-from threading import Thread
-from time import time
-import requests
+bot.py
 
-# --- CONFIGURATION ---
-API_ID = 28593211
-API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d"
-BOT_TOKEN = "7696316358:AAGZw4OUGAT628QX2DBleIVV2JWQTfiQu88"
-ADMIN_ID = 5559075560
-BASE_WEBHOOK_URL = "https://file-downloader-zufi.onrender.com"
+import os import asyncio from pyrogram import Client, filters from flask import Flask, request import threading import requests
 
-# --- LOGGING ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
+============ CONFIGURATION ============
 
-# --- FLASK APP ---
-app = Flask(__name__)
-app.wsgi_app = ProxyFix(app.wsgi_app)
+BOT_TOKEN = "7696316358:AAGZw4OUGAT628QX2DBleIVV2JWQTfiQu88" API_ID = 28593211 API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d" ADMIN_ID = 5559075560 BASE_WEBHOOK_URL = "https://file-downloader-zufi.onrender.com"
 
-# --- PYROGRAM CLIENT ---
-app_bot = Client(
-    "bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    workers=10,
-)
+============ PYROGRAM BOT ============
 
-# --- BACKGROUND FLASK SERVER ---
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = request.get_json()
-    asyncio.run(app_bot.process_updates([update]))
-    return "ok", 200
+app_bot = Client( "bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH, in_memory=True )
 
-@app.route("/", methods=["GET"])
-def root():
-    return "<h1>Telegram Downloader Bot is Live!</h1>"
+@app_bot.on_message(filters.command("start")) async def start_command(client, message): await message.reply("Hello! I am alive and running on Render.com.")
 
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+============ FLASK WEB SERVER ============
 
-# --- BOT HANDLERS ---
-@app_bot.on_message(filters.command("start"))
-async def start(client, message: Message):
-    await message.reply_text(
-        "Welcome to the Downloader Bot!\n\n"
-        "Send me a direct download link or supported URL and I’ll fetch it for you."
-    )
+flask_app = Flask(name)
 
-@app_bot.on_message(filters.command("admin") & filters.user(ADMIN_ID))
-async def admin_panel(client, message: Message):
-    await message.reply_text("Admin panel is under development.")
+@flask_app.route(f"/{BOT_TOKEN}", methods=["POST"]) def webhook(): update = request.get_json(force=True) if update: app_bot.process_update(update) return "ok"
 
-@app_bot.on_message(filters.text & filters.private)
-async def handle_links(client, message: Message):
-    url = message.text.strip()
-    msg = await message.reply("Processing your link...")
+@flask_app.route("/") def index(): return "Telegram Bot Running Successfully on Render!"
 
-    try:
-        file = requests.get(url, stream=True)
-        filename = url.split("/")[-1].split("?")[0]
-        start = time()
+============ RUN FUNCTIONS ============
 
-        with open(filename, "wb") as f:
-            for chunk in file.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+async def main(): await app_bot.start() try: webhook_url = f"{BASE_WEBHOOK_URL}/{BOT_TOKEN}" await app_bot.set_webhook(webhook_url) except Exception as e: print("Webhook error:", e) print("Bot started with webhook.")
 
-        elapsed = round(time() - start, 2)
-        await msg.edit(f"Downloaded in {elapsed} sec. Uploading...")
+# Run Flask app in thread
+threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))).start()
 
-        await message.reply_document(filename, caption=f"Uploaded: `{filename}`")
-        os.remove(filename)
-        await msg.delete()
+if name == "main": asyncio.run(main())
 
-    except Exception as e:
-        await msg.edit(f"Failed: {e}")
-
-# --- MAIN ENTRY POINT ---
-async def main():
-    await app_bot.start()
-    await app_bot.set_webhook(f"{BASE_WEBHOOK_URL}/{BOT_TOKEN}")
-    Thread(target=run_flask).start()
-    logger.info("Bot is up and running with webhook...")
-
-if __name__ == "__main__":
-    asyncio.run(main())
