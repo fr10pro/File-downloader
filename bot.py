@@ -4,7 +4,7 @@ import uuid
 import asyncio
 from time import time
 import requests
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from PIL import Image
@@ -268,7 +268,14 @@ def upload_progress(current, total, message: Message, start_time):
 # === Enhanced Admin Panel ===
 @web.route('/admin')
 def admin_panel():
-    files = [f for f in os.listdir("downloads") if os.path.isfile(os.path.join("downloads", f))]
+    # Precompute file sizes to avoid template syntax issues
+    files = []
+    for f in os.listdir("downloads"):
+        if os.path.isfile(os.path.join("downloads", f)):
+            size_bytes = os.path.getsize(os.path.join("downloads", f))
+            size_mb = round(size_bytes / (1024 * 1024), 2)
+            files.append({"name": f, "size": size_mb})
+    
     thumbs = [f for f in os.listdir("thumbnails") if f.endswith('.jpg')]
     
     html = """
@@ -300,7 +307,7 @@ def admin_panel():
             <h2>Downloaded Files</h2>
             <ul>
             {% for file in files %}
-                <li>{{ loop.index }}. {{ file }} ({{ (os.path.getsize(os.path.join('downloads', file))/(1024*1024)|round(2) }} MB)</li>
+                <li>{{ loop.index }}. {{ file.name }} ({{ file.size }} MB)</li>
             {% else %}
                 <li>No files found.</li>
             {% endfor %}
@@ -341,12 +348,11 @@ def admin_panel():
     return render_template_string(html, files=files, thumbs=thumbs,
                                 active_downloads=active,
                                 pending_uploads=pending,
-                                user_thumbs=thumbs_count,
-                                os=os)
+                                user_thumbs=thumbs_count)
 
 @web.route('/thumb/<filename>')
 def serve_thumbnail(filename):
-    return web.send_from_directory("thumbnails", filename)
+    return send_from_directory("thumbnails", filename)
 
 @web.route('/delete_thumb/<filename>', methods=['POST'])
 def delete_thumbnail(filename):
