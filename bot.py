@@ -38,7 +38,7 @@ Need help? Contact @Fr10pro
 
 def get_task_id(msg: Message):
     """Generate unique task ID using chat ID and message ID"""
-    return f"{msg.chat.id}_{msg.id}"  # Fixed: msg.id instead of msg.message_id
+    return f"{msg.chat.id}_{msg.id}"
 
 @app.on_message(filters.command("start"))
 def start(_, msg: Message):
@@ -83,12 +83,17 @@ def handle_link(_, msg: Message):
         }
     
     # Create download message with cancel button
-    download_msg = msg.reply(
-        f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{task_id}")]
-        ])
-    )
+    try:
+        download_msg = msg.reply(
+            f"**Downloading `{filename}`...**\n0 MB • 0 MB | 0 MB/s",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{task_id}")]
+            ])
+        )
+    except Exception as e:
+        with tasks_lock:
+            del tasks[task_id]
+        return msg.reply(f"❌ Failed to start download: {e}")
     
     # Update task with download message reference
     with tasks_lock:
@@ -106,6 +111,9 @@ def download_thread(url: str, filename: str, task_id: str):
         }
         r = requests.get(url, headers=headers, stream=True, timeout=30)
         total = int(r.headers.get('content-length', 0))
+        if total == 0:
+            raise ValueError("Content-Length header missing or zero")
+            
         total_mb = round(total / 1024 / 1024, 2)
         
         with open(filename, 'wb') as f:
@@ -158,9 +166,6 @@ def download_thread(url: str, filename: str, task_id: str):
     except Exception as e:
         update_download_msg(task_id, f"❌ Error downloading: `{e}`")
         cleanup_task(filename, task_id)
-    finally:
-        # Don't remove task yet - wait for upload selection
-        pass
 
 def update_download_msg(task_id: str, text: str, markup=None):
     """Update download progress message safely"""
@@ -172,16 +177,16 @@ def update_download_msg(task_id: str, text: str, markup=None):
             
             # Edit message if possible
             task["download_msg"].edit(text, reply_markup=markup)
-    except:
-        pass
+    except Exception as e:
+        print(f"Error updating message: {e}")
 
 def cleanup_task(filename: str, task_id: str):
     """Clean up files and task entries"""
     try:
         if os.path.exists(filename):
             os.remove(filename)
-    except:
-        pass
+    except Exception as e:
+        print(f"Error deleting file: {e}")
     
     with tasks_lock:
         if task_id in tasks:
@@ -201,21 +206,22 @@ def handle_callback(_, cb: CallbackQuery):
         with tasks_lock:
             task = tasks.get(task_id)
             if not task:
-                cb.answer("⚠️ Task already completed or canceled")
+                cb.answer("⚠️ Task already completed or canceled", show_alert=True)
                 return
             
             if task["status"] == "downloading":
                 task["cancel_flag"] = True
+                cb.answer("Canceling download...", show_alert=False)
                 cb.message.edit("❌ **Download canceled by user.**")
             else:
-                cb.answer("⚠️ Cannot cancel - download already completed")
+                cb.answer("⚠️ Cannot cancel - download already completed", show_alert=True)
         return
     
     # Handle upload format selection
     with tasks_lock:
         task = tasks.get(task_id)
         if not task:
-            cb.answer("⚠️ Task expired or invalid")
+            cb.answer("⚠️ Task expired or invalid", show_alert=True)
             return
         
         filename = task.get("filename")
@@ -224,52 +230,53 @@ def handle_callback(_, cb: CallbackQuery):
             cleanup_task(filename, task_id)
             return
     
-    cb.message.edit("**Uploading file...**")
+    try:
+        cb.message.edit("**Uploading file...**")
+    except:
+        pass
     
     # Use thumbnail if exists
     thumb = THUMB_PATH if os.path.exists(THUMB_PATH) else None
-    start_time = time()
     caption = f"{filename} | Made by @Fr10pro"
     
     try:
         if action == "v":
             # Upload as video
-            sent = cb.message.reply_video(
+            sent = app.send_video(
+                chat_id=cb.message.chat.id,
                 video=filename,
                 caption=caption,
                 thumb=thumb,
-                progress=upload_progress,
-                progress_args=(cb.message, start_time)
+                reply_to_message_id=cb.message.reply_to_message_id
             )
         else:
             # Upload as document
-            sent = cb.message.reply_document(
+            sent = app.send_document(
+                chat_id=cb.message.chat.id,
                 document=filename,
                 caption=caption,
                 thumb=thumb,
-                progress=upload_progress,
-                progress_args=(cb.message, start_time)
+                reply_to_message_id=cb.message.reply_to_message_id
             )
         
         # Clean up after successful upload
-        cb.message.delete()
-        sent.reply(f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})")
+        try:
+            cb.message.delete()
+            app.send_message(
+                chat_id=cb.message.chat.id,
+                text=f"✅ **Uploaded!**\n**Share this link:** [t.me/{app.get_me().username}](https://t.me/{app.get_me().username})",
+                reply_to_message_id=sent.id
+            )
+        except:
+            pass
     
     except Exception as e:
-        cb.message.edit(f"❌ Upload failed: `{e}`")
+        try:
+            cb.message.edit(f"❌ Upload failed: `{e}`")
+        except:
+            pass
     finally:
         cleanup_task(filename, task_id)
-
-def upload_progress(current, total, message: Message, start_time):
-    """Update upload progress message"""
-    percent = current * 100 / total
-    speed = round(current / 1024 / 1024 / (time() - start_time + 0.1), 2)
-    done_mb = round(current / 1024 / 1024, 2)
-    total_mb = round(total / 1024 / 1024, 2)
-    try:
-        message.edit(f"**Uploading...**\n{done_mb} MB • {total_mb} MB | {speed} MB/s")
-    except:
-        pass
 
 # === Admin Panel UI ===
 @web.route('/admin')
