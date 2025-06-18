@@ -25,6 +25,7 @@ web = Flask(__name__)
 download_states = {}
 file_info = {}
 user_thumbnails = {}
+lock = threading.Lock()
 
 # Clean up temp files on startup
 for file in os.listdir():
@@ -59,16 +60,12 @@ async def set_thumbnail(_, msg: Message):
         return await msg.reply("Please send an image with /setimage command")
     
     try:
-        # Get the largest available photo
-        photo = msg.photo[-1]
-        file_id = photo.file_id
+        # Download the photo directly to a file
+        temp_file = f"temp_{msg.from_user.id}.jpg"
+        await msg.download(file_name=temp_file)
         
-        # Download and process image
-        buf = BytesIO()
-        await app.download_media(file_id, file_name=buf)
-        buf.seek(0)
-        
-        img = Image.open(buf)
+        # Process image
+        img = Image.open(temp_file)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         img.thumbnail((320, 320))
@@ -76,11 +73,16 @@ async def set_thumbnail(_, msg: Message):
         # Save thumbnail per user
         user_thumb = f"thumb_{msg.from_user.id}.jpg"
         img.save(user_thumb, "JPEG")
-        user_thumbnails[msg.from_user.id] = user_thumb
+        
+        with lock:
+            user_thumbnails[msg.from_user.id] = user_thumb
         
         await msg.reply_text("✅ Thumbnail set successfully!")
     except Exception as e:
         await msg.reply_text(f"❌ Error setting thumbnail: {str(e)}")
+    finally:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
 @app.on_message(filters.text & ~filters.command(["start", "setimage"]))
 def handle_link(_, msg: Message):
@@ -88,8 +90,9 @@ def handle_link(_, msg: Message):
     if not url.startswith("http"):
         return msg.reply("Invalid link. Please send a valid direct download link.")
 
-    if len(download_states) >= MAX_CONCURRENT_DOWNLOADS:
-        return msg.reply("🚫 Server is busy. Please try again later.")
+    with lock:
+        if len(download_states) >= MAX_CONCURRENT_DOWNLOADS:
+            return msg.reply("🚫 Server is busy. Please try again later.")
 
     original_filename = url.split("/")[-1].split("?")[0]
     temp_filename = f"{uuid.uuid4()}.temp"
@@ -100,16 +103,17 @@ def handle_link(_, msg: Message):
                              ]))
 
     state_key = f"{download_msg.chat.id}:{download_msg.id}"
-    download_states[state_key] = {
-        'cancel': False,
-        'temp_file': temp_filename,
-        'original_filename': original_filename
-    }
+    with lock:
+        download_states[state_key] = {
+            'cancel': False,
+            'temp_file': temp_filename,
+            'original_filename': original_filename,
+            'user_id': msg.from_user.id
+        }
 
-    threading.Thread(target=download_thread, args=(url, temp_filename, original_filename, download_msg)).start()
+    threading.Thread(target=download_thread, args=(url, temp_filename, original_filename, download_msg, state_key)).start()
 
-def download_thread(url, temp_filename, original_filename, download_msg):
-    state_key = f"{download_msg.chat.id}:{download_msg.id}"
+def download_thread(url, temp_filename, original_filename, download_msg, state_key):
     try:
         headers = {"User-Agent": "Mozilla/5.0", "Referer": url}
         with requests.get(url, headers=headers, stream=True, timeout=30) as r:
@@ -123,9 +127,11 @@ def download_thread(url, temp_filename, original_filename, download_msg):
                 last_update = time()
 
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if state_key in download_states and download_states[state_key].get('cancel'):
-                        download_msg.edit(f"❌ **Download canceled:** `{original_filename}`")
-                        return
+                    with lock:
+                        state = download_states.get(state_key)
+                        if not state or state.get('cancel'):
+                            download_msg.edit(f"❌ **Download canceled:** `{original_filename}`")
+                            return
                     
                     if chunk:
                         f.write(chunk)
@@ -139,7 +145,7 @@ def download_thread(url, temp_filename, original_filename, download_msg):
                                     f"**Downloading `{original_filename}`...**\n"
                                     f"{done_mb} MB • {total_mb} MB | {speed} MB/s",
                                     reply_markup=InlineKeyboardMarkup([
-                                        [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{download_msg.from_user.id}|{temp_filename}")]
+                                        [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel|{state['user_id']}|{temp_filename}")]
                                     ])
                                 )
                             except:
@@ -147,7 +153,8 @@ def download_thread(url, temp_filename, original_filename, download_msg):
                             last_update = now
 
         # Store file info for upload
-        file_info[temp_filename] = original_filename
+        with lock:
+            file_info[temp_filename] = original_filename
 
         buttons = InlineKeyboardMarkup([
             [
@@ -160,8 +167,9 @@ def download_thread(url, temp_filename, original_filename, download_msg):
     except Exception as e:
         download_msg.edit(f"❌ Error downloading: `{str(e)}`")
     finally:
-        if state_key in download_states:
-            del download_states[state_key]
+        with lock:
+            if state_key in download_states:
+                del download_states[state_key]
 
 @app.on_callback_query()
 def handle_callback(_, cb: CallbackQuery):
@@ -170,11 +178,16 @@ def handle_callback(_, cb: CallbackQuery):
         if cb.from_user.id != int(user_id):
             return cb.answer("You didn't start this download!", show_alert=True)
         
-        # Find the download state
-        state_key = next((k for k, v in download_states.items() if v['temp_file'] == temp_filename), None)
+        # Find and cancel the download
+        canceled = False
+        with lock:
+            for state_key, state in list(download_states.items()):
+                if state['temp_file'] == temp_filename and state['user_id'] == int(user_id):
+                    state['cancel'] = True
+                    canceled = True
+                    break
         
-        if state_key:
-            download_states[state_key]['cancel'] = True
+        if canceled:
             cb.message.edit("❌ **Download canceled by user.**")
         else:
             cb.message.edit("⚠️ No active download found.")
@@ -189,7 +202,13 @@ def handle_callback(_, cb: CallbackQuery):
     cb.message.edit("**Uploading file...**")
 
     # Get user-specific thumbnail if available
-    thumb = user_thumbnails.get(cb.from_user.id, THUMB_PATH) if os.path.exists(user_thumbnails.get(cb.from_user.id, THUMB_PATH)) else None
+    thumb_path = None
+    user_thumb = user_thumbnails.get(cb.from_user.id)
+    if user_thumb and os.path.exists(user_thumb):
+        thumb_path = user_thumb
+    elif os.path.exists(THUMB_PATH):
+        thumb_path = THUMB_PATH
+
     start_time = time()
 
     try:
@@ -197,7 +216,7 @@ def handle_callback(_, cb: CallbackQuery):
             sent = cb.message.reply_video(
                 video=temp_filename,
                 caption=caption,
-                thumb=thumb,
+                thumb=thumb_path,
                 file_name=original_filename,
                 progress=upload_progress,
                 progress_args=(cb.message, start_time)
@@ -206,7 +225,7 @@ def handle_callback(_, cb: CallbackQuery):
             sent = cb.message.reply_document(
                 document=temp_filename,
                 caption=caption,
-                thumb=thumb,
+                thumb=thumb_path,
                 file_name=original_filename,
                 progress=upload_progress,
                 progress_args=(cb.message, start_time)
@@ -220,11 +239,11 @@ def handle_callback(_, cb: CallbackQuery):
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
-        if temp_filename in file_info:
-            del file_info[temp_filename]
+        with lock:
+            if temp_filename in file_info:
+                del file_info[temp_filename]
 
 def upload_progress(current, total, message: Message, start_time):
-    percent = current * 100 / total
     speed = round(current / (1024 * 1024) / (time() - start_time + 0.1), 2)
     done_mb = round(current / (1024 * 1024), 2)
     total_mb = round(total / (1024 * 1024), 2)
@@ -259,9 +278,12 @@ def admin_panel():
     {% endfor %}
     </ul></body></html>
     """
+    with lock:
+        active = len(download_states)
+        pending = len(file_info)
     return render_template_string(html, files=files, 
-                                active_downloads=len(download_states),
-                                pending_uploads=len(file_info))
+                                active_downloads=active,
+                                pending_uploads=pending)
 
 # === Keep-Alive Web Server ===
 @web.route('/')
