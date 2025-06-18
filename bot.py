@@ -38,7 +38,7 @@ Need help? Contact @Fr10pro
 
 def get_task_id(msg: Message):
     """Generate unique task ID using chat ID and message ID"""
-    return f"{msg.chat.id}_{msg.message_id}"
+    return f"{msg.chat.id}_{msg.id}"  # Fixed: msg.id instead of msg.message_id
 
 @app.on_message(filters.command("start"))
 def start(_, msg: Message):
