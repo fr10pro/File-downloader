@@ -9,7 +9,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, 
 # ==== CONFIG ====
 API_ID = 28593211
 API_HASH = "27ad7de4fe5cab9f8e310c5cc4b8d43d"
-BOT_TOKEN = "6497015478:AAEKPHpfIJ4FvoRIFJH34qqByGBlqxx6kAc"
+BOT_TOKEN = "8145398845:AAH9Vid4Px1l3KrEMcTy4WUgHUCRMg4Pmas"
 THUMB_PATH = "thumb.jpg"
 # ================
 
