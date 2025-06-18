@@ -8,7 +8,6 @@ from flask import Flask, render_template_string
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from PIL import Image
-from io import BytesIO
 
 # ==== CONFIG ====
 API_ID = 28593211
@@ -138,8 +137,10 @@ def download_thread(url, temp_filename, original_filename, download_msg, state_k
                         downloaded += len(chunk)
                         now = time()
                         if now - last_update >= 1:
-                            speed = round((downloaded / (1024 * 1024)) / (now - start_time + 0.1), 2)
-                            done_mb = round(downloaded / (1024 * 1024), 2)
+                            mb_downloaded = downloaded / (1024 * 1024)
+                            time_elapsed = now - start_time + 0.1
+                            speed = round(mb_downloaded / time_elapsed, 2)
+                            done_mb = round(mb_downloaded, 2)
                             try:
                                 download_msg.edit(
                                     f"**Downloading `{original_filename}`...**\n"
